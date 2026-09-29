@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.OM15" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#FF1E293B</item>
+        <item name="android:navigationBarColor">#FF1E293B</item>
+    </style>
+</resources>
