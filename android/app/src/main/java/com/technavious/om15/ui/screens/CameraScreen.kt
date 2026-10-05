@@ -52,6 +52,7 @@ import com.technavious.om15.camera.CameraCapture
 import com.technavious.om15.data.model.TestType
 import com.technavious.om15.data.repository.TestRepository
 import com.technavious.om15.data.schema.Col
+import com.technavious.om15.data.schema.ColType
 import com.technavious.om15.data.schema.ReadingsDoc
 import com.technavious.om15.data.schema.schemaFor
 import com.technavious.om15.ui.components.OrangeGradient
@@ -197,6 +198,11 @@ fun CameraScreen(
                                     try {
                                         val photo = cameraCapture.capturePhoto()
                                         repository.savePhoto(assignmentId, photo.absolutePath, fieldKey)
+                                        if (fieldCol?.type == ColType.IMAGE) {
+                                            Toast.makeText(context, "Photo saved", Toast.LENGTH_SHORT).show()
+                                            onBack()
+                                            return@launch
+                                        }
                                         capturedFile = photo
                                         readingValue = ""
                                         aiSource = "Photo saved – tap Retry to read"
@@ -247,7 +253,7 @@ fun CameraScreen(
                                 return@launch
                             }
                             row[colKey] = readingValue.trim()
-                            schema.table(tableId)?.calc?.invoke(row)
+                            doc.recalc()
                             repository.saveReadingsJson(assignmentId, doc.toJson())
                             Toast.makeText(context, "Saved: $fieldName = ${readingValue.trim()}", Toast.LENGTH_SHORT).show()
                             onBack()

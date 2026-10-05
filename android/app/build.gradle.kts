@@ -130,6 +130,9 @@ dependencies {
 
     // Google Gemini AI called via REST API directly (no SDK needed)
 
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
+
     // Coroutines support for Google Play Services Tasks
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
 }

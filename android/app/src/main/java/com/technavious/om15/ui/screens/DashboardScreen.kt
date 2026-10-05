@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,7 +38,8 @@ fun DashboardScreen(
     repository: TestRepository,
     onCreateProject: () -> Unit,
     onProjectClick: (String) -> Unit,
-    onSettings: () -> Unit = {}
+    onSettings: () -> Unit = {},
+    onReports: () -> Unit = {}
 ) {
     val projects by repository.getAllProjects().collectAsState(initial = emptyList())
     val assignments by repository.getAllAssignments().collectAsState(initial = emptyList())
@@ -59,6 +61,7 @@ fun DashboardScreen(
                 },
                 actions = {
                     OMTag("TECHNAVIOUS")
+                    OMSecondaryButton("Reports", onReports, icon = Icons.Default.TableChart, height = 48.dp, contentColor = Green700)
                     OMIconButton(Icons.Default.Settings, "Settings", onSettings)
                 }
             )

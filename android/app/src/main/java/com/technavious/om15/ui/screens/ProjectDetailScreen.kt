@@ -126,8 +126,7 @@ fun ProjectDetailScreen(
 
 private fun countReadings(assignment: TestAssignmentEntity): Int {
     val type = runCatching { TestType.valueOf(assignment.testType) }.getOrNull() ?: return 0
-    val schema = schemaFor(type)
-    return ReadingsDoc.parse(assignment.readingsJson, schema).filledCount(schema).first
+    return ReadingsDoc.parse(assignment.readingsJson, schemaFor(type)).filledCount().first
 }
 
 @Composable

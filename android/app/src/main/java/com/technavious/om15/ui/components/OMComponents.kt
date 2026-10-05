@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -90,17 +91,23 @@ fun OMIconButton(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun OMCard(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
     borderColor: Color = Slate200,
     containerColor: Color = Color.White,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val shape = RoundedCornerShape(20.dp)
+    val click = when {
+        onClick == null && onLongClick == null -> Modifier
+        else -> Modifier.clip(shape).combinedClickable(onClick = { onClick?.invoke() }, onLongClick = onLongClick)
+    }
     Surface(
-        modifier = modifier.fillMaxWidth().then(if (onClick != null) Modifier.clip(shape).clickable(onClick = onClick) else Modifier),
+        modifier = modifier.fillMaxWidth().then(click),
         shape = shape,
         color = containerColor,
         border = BorderStroke(1.dp, borderColor),

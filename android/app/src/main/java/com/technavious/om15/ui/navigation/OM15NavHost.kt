@@ -19,6 +19,11 @@ object Routes {
     const val TEST_SELECT = "project/{projectId}/select-test"
     const val TEST_FORM = "test/{assignmentId}"
     const val CAMERA = "camera/{assignmentId}/{fieldKey}"
+    const val REPORTS = "reports"
+    const val VIEWER = "viewer?uri={uri}&name={name}"
+
+    fun viewer(uri: android.net.Uri, name: String) =
+        "viewer?uri=${android.net.Uri.encode(uri.toString())}&name=${android.net.Uri.encode(name)}"
 }
 
 @Composable
@@ -34,7 +39,30 @@ fun OM15NavHost(
                 onProjectClick = { projectId ->
                     navController.navigate("project/$projectId")
                 },
-                onSettings = { navController.navigate(Routes.SETTINGS) }
+                onSettings = { navController.navigate(Routes.SETTINGS) },
+                onReports = { navController.navigate(Routes.REPORTS) }
+            )
+        }
+
+        composable(Routes.REPORTS) {
+            ReportsScreen(
+                onBack = { navController.popBackStack() },
+                onView = { uri, name -> navController.navigate(Routes.viewer(uri, name)) }
+            )
+        }
+
+        composable(
+            Routes.VIEWER,
+            arguments = listOf(
+                navArgument("uri") { type = NavType.StringType },
+                navArgument("name") { type = NavType.StringType; defaultValue = "Report.xlsx" }
+            )
+        ) { backStackEntry ->
+            val uri = backStackEntry.arguments?.getString("uri")?.let(android.net.Uri::parse) ?: return@composable
+            ExcelViewerScreen(
+                uri = uri,
+                fileName = backStackEntry.arguments?.getString("name") ?: "Report.xlsx",
+                onBack = { navController.popBackStack() }
             )
         }
 
@@ -98,7 +126,8 @@ fun OM15NavHost(
                 onBack = { navController.popBackStack() },
                 onNavigateToCamera = { fieldKey ->
                     navController.navigate("camera/$assignmentId/${android.net.Uri.encode(fieldKey)}")
-                }
+                },
+                onViewReport = { uri, name -> navController.navigate(Routes.viewer(uri, name)) }
             )
         }
 

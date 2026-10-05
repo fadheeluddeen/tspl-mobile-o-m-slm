@@ -13,7 +13,6 @@ import java.io.OutputStream
 data class SavedFile(val uri: Uri, val displayPath: String)
 
 object DownloadSaver {
-    private const val XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
     fun safeName(raw: String): String =
         raw.trim().replace(Regex("""[\\/:*?"<>|]"""), "_").replace(Regex("\\s+"), "_").take(80).ifBlank { "Untitled" }
@@ -42,7 +41,8 @@ object DownloadSaver {
             val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).apply { mkdirs() }
             val file = File(dir, fileName)
             FileOutputStream(file).use(write)
-            SavedFile(Uri.fromFile(file), "Download/$fileName")
+            val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            SavedFile(uri, "Download/$fileName")
         }
     }
 }
