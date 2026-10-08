@@ -47,6 +47,12 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.technavious.om15.ai.GeminiMeterReader
+import com.technavious.om15.ai.MeterExtraction
+import com.technavious.om15.ai.ReadingRequest
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.foundation.rememberScrollState
 import com.technavious.om15.ai.QwenMeterReader
 import com.technavious.om15.camera.CameraCapture
 import com.technavious.om15.data.model.TestType
@@ -63,6 +69,10 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 private val PanelBg = Color(0xF2020617)
+
+/** Alignment box geometry, shared by the drawn reticle and the crop sent to the AI. */
+private const val BOX_WIDTH_FRACTION = 0.72f
+private const val BOX_ASPECT = 3f / 4f
 
 @Composable
 fun CameraScreen(
@@ -85,6 +95,12 @@ fun CameraScreen(
     var torchOn by remember { mutableStateOf(false) }
     var gridOn by remember { mutableStateOf(true) }
     var fieldCol by remember { mutableStateOf<Col?>(null) }
+    var site by remember { mutableStateOf("") }
+    var equipmentTag by remember { mutableStateOf("") }
+    var testName by remember { mutableStateOf("") }
+    var extraction by remember { mutableStateOf<MeterExtraction?>(null) }
+    var reviewReasons by remember { mutableStateOf<List<String>>(emptyList()) }
+    var previewSize by remember { mutableStateOf(IntSize.Zero) }
     val cell = remember(fieldKey) { ReadingsDoc.splitCellKey(fieldKey) }
     val fieldName = fieldCol?.header ?: cell?.third ?: fieldKey
     val unit = fieldCol?.unit
@@ -100,8 +116,15 @@ fun CameraScreen(
     }
 
     LaunchedEffect(assignmentId, fieldKey) {
-        val type = repository.getAssignment(assignmentId)?.let { runCatching { TestType.valueOf(it.testType) }.getOrNull() }
-        fieldCol = if (type != null && cell != null) schemaFor(type).table(cell.first)?.col(cell.third) else null
+        val a = repository.getAssignment(assignmentId) ?: return@LaunchedEffect
+        val type = runCatching { TestType.valueOf(a.testType) }.getOrNull() ?: return@LaunchedEffect
+        val schema = schemaFor(type)
+        val table = cell?.let { schema.table(it.first) }
+        fieldCol = cell?.let { table?.col(it.third) }
+        site = repository.getProject(a.projectId)?.name ?: a.projectName
+        testName = type.displayName
+        val row = cell?.let { ReadingsDoc.parse(a.readingsJson, schema).findRow(it.first, it.second) }
+        equipmentTag = row?.let { r -> table?.columns?.firstOrNull { it.type == ColType.TEXT }?.let { r[it.key] } }.orEmpty()
     }
 
     LaunchedEffect(Unit) {
@@ -112,18 +135,26 @@ fun CameraScreen(
         onDispose { cameraCapture.release() }
     }
 
-    suspend fun readWithAi(file: File) {
+    suspend fun readWithAi(photo: File) {
+        val file = CameraCapture.boxFileFor(photo).takeIf { it.exists() } ?: photo
+        extraction = null
+        reviewReasons = emptyList()
         if (useGemini) {
             try {
-                val bitmap = withContext(Dispatchers.IO) { cameraCapture.loadBitmap(file) }
-                val reading = withContext(Dispatchers.IO) {
-                    GeminiMeterReader(GeminiMeterReader.getApiKey(context)).readMeterImage(bitmap, fieldName, unit)
+                val bitmap = withContext(Dispatchers.IO) { cameraCapture.loadBitmap(file, 1600) }
+                val (x, choice) = withContext(Dispatchers.IO) {
+                    GeminiMeterReader(context, GeminiMeterReader.getApiKey(context))
+                        .read(bitmap, ReadingRequest(fieldName, unit, site, equipmentTag, testName))
+                        .also { (x, _) -> File(file.absolutePath + ".ai.json").writeText(x.rawJson) }
                 }
-                readingValue = reading
-                aiSource = if (reading.isBlank()) "No reading detected" else "Gemini AI"
+                extraction = x
+                reviewReasons = choice.reviewReasons
+                readingValue = choice.value
+                aiSource = if (choice.value.isBlank()) "No reading detected" else if (choice.reviewReasons.isEmpty()) "Gemini AI" else "Gemini AI · check"
                 return
             } catch (e: Exception) {
-                Toast.makeText(context, "Gemini error: ${e.message?.take(100)}", Toast.LENGTH_LONG).show()
+                val why = if (e is GeminiMeterReader.GeminiUnavailableException) e.message else "Online AI error: ${e.message?.take(80)}"
+                Toast.makeText(context, "$why — reading offline instead", Toast.LENGTH_LONG).show()
             }
         }
         val qwen = QwenMeterReader.getInstance()
@@ -139,7 +170,7 @@ fun CameraScreen(
     }
 
 
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    Box(Modifier.fillMaxSize().background(Color.Black).onSizeChanged { previewSize = it }) {
         if (!hasCameraPermission) {
             Text("Camera permission required", color = Color.White, modifier = Modifier.align(Alignment.Center))
         } else {
@@ -203,6 +234,14 @@ fun CameraScreen(
                                             onBack()
                                             return@launch
                                         }
+                                        if (gridOn && previewSize.width > 0 && previewSize.height > 0) {
+                                            val boxH = BOX_WIDTH_FRACTION * previewSize.width * BOX_ASPECT / previewSize.height
+                                            val box = android.graphics.RectF(
+                                                (1 - BOX_WIDTH_FRACTION) / 2, (1 - boxH) / 2,
+                                                (1 + BOX_WIDTH_FRACTION) / 2, (1 + boxH) / 2
+                                            )
+                                            runCatching { withContext(Dispatchers.IO) { cameraCapture.cropToBox(photo, box) } }
+                                        }
                                         capturedFile = photo
                                         readingValue = ""
                                         aiSource = "Photo saved – tap Retry to read"
@@ -229,8 +268,10 @@ fun CameraScreen(
                     useGemini = useGemini,
                     value = readingValue,
                     onValueChange = { readingValue = it },
+                    extraction = extraction,
+                    reviewReasons = reviewReasons,
                     isReading = isReading,
-                    onRetake = { capturedFile = null; readingValue = ""; aiSource = "" },
+                    onRetake = { capturedFile = null; readingValue = ""; aiSource = ""; extraction = null; reviewReasons = emptyList() },
                     onRetry = {
                         isReading = true
                         aiSource = "Reading..."
@@ -284,8 +325,8 @@ private fun DarkRoundButton(icon: ImageVector, description: String, onClick: () 
 private fun AlignmentReticle(modifier: Modifier) {
     Box(
         modifier = modifier
-            .fillMaxWidth(0.72f)
-            .aspectRatio(4f / 3f)
+            .fillMaxWidth(BOX_WIDTH_FRACTION)
+            .aspectRatio(1f / BOX_ASPECT)
             .drawBehind {
                 val stroke = 2.dp.toPx()
                 drawRoundRect(
@@ -326,6 +367,8 @@ private fun ResultPanel(
     useGemini: Boolean,
     value: String,
     onValueChange: (String) -> Unit,
+    extraction: MeterExtraction?,
+    reviewReasons: List<String>,
     isReading: Boolean,
     onRetake: () -> Unit,
     onRetry: () -> Unit,
@@ -389,6 +432,40 @@ private fun ResultPanel(
                         }
                     )
                     unit?.let { Text(it, color = Color(0xFFFB923C), fontFamily = MeterMono, fontWeight = FontWeight.Bold, fontSize = 20.sp) }
+                }
+            }
+        }
+
+        if (!isReading && extraction != null) {
+            val choices = extraction.readings.filter { it.formValue.isNotEmpty() }.map { it.formValue to it.display + " · " + it.confidence } +
+                extraction.readings.flatMap { r -> r.alternates.map { alt -> alt.trim() to "$alt (alternate)" } }
+            if (choices.size > 1) {
+                Text("READINGS ON THIS DISPLAY — TAP TO USE", color = Slate400, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    choices.distinct().forEach { (v, label) ->
+                        val selected = v == value.trim()
+                        Text(
+                            label,
+                            color = if (selected) Color.White else Color(0xFFFDBA74),
+                            fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(if (selected) Orange600 else Color.White.copy(alpha = 0.08f))
+                                .border(1.dp, Orange500.copy(alpha = 0.5f), RoundedCornerShape(50))
+                                .clickable { onValueChange(v) }
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+            }
+            if (reviewReasons.isNotEmpty()) {
+                Column(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color(0x33F59E0B))
+                        .border(1.dp, Color(0xFFF59E0B), RoundedCornerShape(14.dp)).padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text("CHECK THIS READING", color = Color(0xFFFBBF24), fontSize = 11.sp, fontWeight = FontWeight.Black, letterSpacing = 0.8.sp)
+                    reviewReasons.forEach { Text("• $it", color = Color(0xFFFDE68A), fontSize = 13.sp) }
                 }
             }
         }

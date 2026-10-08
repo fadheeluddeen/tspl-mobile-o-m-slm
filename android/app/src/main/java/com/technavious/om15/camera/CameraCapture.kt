@@ -46,13 +46,56 @@ class CameraCapture(private val context: Context) {
 
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
-            try {
-                provider.unbindAll()
-                camera = provider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, imageCapture)
-            } catch (e: Exception) {
-                Log.e("CameraCapture", "Camera bind failed", e)
+            // Bind once the preview is laid out so the saved photo is cropped to exactly what is on screen (viewport).
+            previewView.post {
+                try {
+                    provider.unbindAll()
+                    val viewPort = previewView.viewPort
+                    camera = if (viewPort != null) {
+                        val group = UseCaseGroup.Builder().addUseCase(preview).addUseCase(imageCapture!!).setViewPort(viewPort).build()
+                        provider.bindToLifecycle(lifecycleOwner, cameraSelector, group)
+                    } else provider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, imageCapture)
+                } catch (e: Exception) {
+                    Log.e("CameraCapture", "Camera bind failed", e)
+                }
             }
         }, ContextCompat.getMainExecutor(context))
+    }
+
+    /**
+     * Crops a captured photo to the on-screen alignment box (given as fractions of the preview) so the AI
+     * only sees the numbers inside it. Returns the cropped file saved next to the original as *_box.jpg.
+     */
+    fun cropToBox(file: File, box: android.graphics.RectF): File {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 2400) sample *= 2
+        val raw = BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply { inSampleSize = sample })
+        val rotation = when (android.media.ExifInterface(file.absolutePath)
+            .getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL)) {
+            android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+            android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+            android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+            else -> 0f
+        }
+        val upright = if (rotation == 0f) raw
+        else Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, Matrix().apply { postRotate(rotation) }, true).also { raw.recycle() }
+
+        val left = (box.left * upright.width).toInt().coerceIn(0, upright.width - 1)
+        val top = (box.top * upright.height).toInt().coerceIn(0, upright.height - 1)
+        val w = (box.width() * upright.width).toInt().coerceIn(1, upright.width - left)
+        val h = (box.height() * upright.height).toInt().coerceIn(1, upright.height - top)
+        val cropped = Bitmap.createBitmap(upright, left, top, w, h)
+        val out = boxFileFor(file)
+        out.outputStream().use { cropped.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+        if (cropped !== upright) cropped.recycle()
+        upright.recycle()
+        return out
+    }
+
+    companion object {
+        fun boxFileFor(photo: File) = File(photo.parentFile, photo.nameWithoutExtension + "_box.jpg")
     }
 
     suspend fun capturePhoto(): File = suspendCoroutine { cont ->

@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 #include "llama.h"
@@ -14,6 +15,14 @@
 
 static llama_model * g_model = nullptr;
 static mtmd_context * g_mtmd_ctx = nullptr;
+
+static int cpu_threads() {
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n > 0 ? static_cast<int>(n) : 4;
+}
+
+// The form already knows the unit, so the model may only emit a plain number (sign, digits, one decimal point).
+static const char * NUMBER_GRAMMAR = R"(root ::= "-"? [0-9]+ ("." [0-9]+)?)";
 
 extern "C" {
 
@@ -48,7 +57,7 @@ Java_com_technavious_om15_ai_LlamaEngine_loadModel(
 
     mtmd_context_params mtmd_params = mtmd_context_params_default();
     mtmd_params.use_gpu = false;
-    mtmd_params.n_threads = 4;
+    mtmd_params.n_threads = cpu_threads();
     // CPU flash-attention path segfaults on this device
     mtmd_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
 
@@ -83,9 +92,9 @@ Java_com_technavious_om15_ai_LlamaEngine_runInference(
     LOGI("Running inference on: %s", image_path);
 
     llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx = 4096;
+    ctx_params.n_ctx = 2048;
     ctx_params.n_threads = 4;
-    ctx_params.n_threads_batch = 4;
+    ctx_params.n_threads_batch = cpu_threads();
     ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
 
     llama_context * ctx = llama_new_context_with_model(g_model, ctx_params);
@@ -158,8 +167,10 @@ Java_com_technavious_om15_ai_LlamaEngine_runInference(
 
     // Generate response tokens
     std::string response;
-    const int max_tokens = 24;
+    const int max_tokens = 12;
     llama_sampler * smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
+    llama_sampler * grammar = llama_sampler_init_grammar(llama_model_get_vocab(g_model), NUMBER_GRAMMAR, "root");
+    if (grammar) llama_sampler_chain_add(smpl, grammar);
     llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
 
     for (int i = 0; i < max_tokens; i++) {

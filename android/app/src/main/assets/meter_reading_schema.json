@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "required": ["readings", "image_quality"],
+  "properties": {
+    "readings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["value_raw", "unit_displayed", "confidence", "alternate_readings"],
+        "properties": {
+          "value_raw": { "type": ["string", "null"] },
+          "unit_displayed": { "type": ["string", "null"] },
+          "confidence": { "type": "string", "enum": ["high", "medium", "low", "unreadable"] },
+          "alternate_readings": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "image_quality": { "type": "string", "enum": ["good", "acceptable", "poor", "unusable"] }
+  }
+}

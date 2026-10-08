@@ -156,11 +156,12 @@ Example: 4.52,12.6"""
 
     companion object {
         private const val TAG = "QwenMeterReader"
-        private const val MAX_SIDE = 672
+        // The image is already cropped to the alignment box, so a small size keeps digits legible while cutting vision tokens ~3x.
+        private const val MAX_SIDE = 384
         private const val COMMON_PROMPT =
-            "What number is shown on the main display of this meter? " +
+            "Read the main (largest) number on this meter display. " +
             "Copy the digits exactly as they appear, including the decimal point and any minus sign. " +
-            "Reply with only the number."
+            "Ignore model numbers, labels and smaller secondary readings. Reply with only the number."
 
         @Volatile
         private var instance: QwenMeterReader? = null

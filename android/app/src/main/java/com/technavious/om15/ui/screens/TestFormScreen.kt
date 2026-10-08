@@ -5,6 +5,9 @@ import android.content.Context
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -36,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.technavious.om15.ai.GeminiMeterReader
+import com.technavious.om15.ai.ReadingRequest
 import com.technavious.om15.ai.QwenMeterReader
 import com.technavious.om15.data.db.TestAssignmentEntity
 import com.technavious.om15.data.model.*
@@ -135,6 +139,27 @@ fun TestFormScreen(
     var rowToDelete by remember { mutableStateOf<Pair<TableSchema, Row>?>(null) }
     var groupToDelete by remember { mutableStateOf<Pair<GroupSet, String>?>(null) }
     var downloaded by remember { mutableStateOf<SavedFile?>(null) }
+    var uploadTarget by remember { mutableStateOf<String?>(null) }
+
+    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        val cellKey = uploadTarget
+        uploadTarget = null
+        if (uri == null || cellKey == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            try {
+                val file = withContext(Dispatchers.IO) {
+                    val dir = File(context.filesDir, "photos").apply { mkdirs() }
+                    File(dir, "UPL_${System.currentTimeMillis()}.jpg").also { out ->
+                        context.contentResolver.openInputStream(uri)!!.use { input -> out.outputStream().use { input.copyTo(it) } }
+                    }
+                }
+                repository.savePhoto(assignmentId, file.absolutePath, cellKey)
+                Toast.makeText(context, "Photo uploaded", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(context, "Upload failed: ${e.message?.take(100)}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     val testType = assignment?.let { runCatching { TestType.valueOf(it.testType) }.getOrNull() }
 
@@ -290,13 +315,19 @@ fun TestFormScreen(
                         onCamera = { colKey ->
                             scope.launch { save(); onNavigateToCamera(ReadingsDoc.cellKey(e.table.id, e.row[ROW_ID].orEmpty(), colKey)) }
                         },
+                        onUpload = { colKey ->
+                            uploadTarget = ReadingsDoc.cellKey(e.table.id, e.row[ROW_ID].orEmpty(), colKey)
+                            pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        },
                         onReread = { col, path ->
                             if (readingKey != null) return@RowCard
                             val cellKey = ReadingsDoc.cellKey(e.table.id, e.row[ROW_ID].orEmpty(), col.key)
                             readingKey = cellKey
                             scope.launch {
                                 try {
-                                    val reading = readMeter(context, path, col.label)
+                                    val tag = e.table.columns.firstOrNull { it.type == ColType.TEXT }?.let { e.row[it.key] }.orEmpty()
+                                    val reading = readMeter(context, path, col, ReadingRequest(col.header, col.unit,
+                                        assignment?.projectName.orEmpty(), tag, testType?.displayName.orEmpty()))
                                     if (reading.isNotBlank()) { editRow(e.table, e.row, col.key, reading); Toast.makeText(context, "${col.header}: $reading", Toast.LENGTH_SHORT).show() }
                                     else Toast.makeText(context, "No reading detected", Toast.LENGTH_SHORT).show()
                                 } catch (ex: Exception) {
@@ -495,6 +526,7 @@ private fun RowCard(
     hiddenKeys: Set<String>,
     onChange: (String, String) -> Unit,
     onCamera: (String) -> Unit,
+    onUpload: (String) -> Unit,
     onReread: (Col, String) -> Unit,
     onDelete: (() -> Unit)?
 ) {
@@ -545,7 +577,7 @@ private fun RowCard(
                         ValueCell(
                             col = col, value = row[col.key].orEmpty(), version = version,
                             photoPath = photos[key], reading = readingKey == key,
-                            onCamera = { onCamera(col.key) }, onReread = { path -> onReread(col, path) }
+                            onCamera = { onCamera(col.key) }, onUpload = { onUpload(col.key) }, onReread = { path -> onReread(col, path) }
                         ) { onChange(col.key, it) }
                     }
                 }
@@ -566,6 +598,7 @@ private fun ValueCell(
     photoPath: String? = null,
     reading: Boolean = false,
     onCamera: (() -> Unit)? = null,
+    onUpload: (() -> Unit)? = null,
     onReread: ((String) -> Unit)? = null,
     onValueChange: (String) -> Unit
 ) {
@@ -573,14 +606,14 @@ private fun ValueCell(
         ColType.CALC -> CalcCell(col, value)
         ColType.SELECT -> SelectCell(col, value, onValueChange)
         ColType.CHECK -> CheckCell(col, value == "true") { onValueChange(it.toString()) }
-        ColType.IMAGE -> ImageCell(col, photoPath, onCamera)
+        ColType.IMAGE -> ImageCell(col, photoPath, onCamera, onUpload)
         ColType.DATE -> DateCell(col, value, onValueChange)
         ColType.LONGTEXT -> OutlinedTextField(
             value = value, onValueChange = onValueChange, label = { Text(col.label) },
             modifier = Modifier.fillMaxWidth().heightIn(min = 96.dp), minLines = 3,
             shape = RoundedCornerShape(14.dp), colors = fieldColors
         )
-        else -> InputCell(col, value, onValueChange, photoPath, reading, onCamera, onReread)
+        else -> InputCell(col, value, onValueChange, photoPath, reading, onCamera, onUpload, onReread)
     }
 }
 
@@ -592,6 +625,7 @@ private fun InputCell(
     photoPath: String?,
     reading: Boolean,
     onCamera: (() -> Unit)?,
+    onUpload: (() -> Unit)?,
     onReread: ((String) -> Unit)?
 ) {
     OutlinedTextField(
@@ -612,6 +646,7 @@ private fun InputCell(
                         if (reading) CircularProgressIndicator(Modifier.size(20.dp).padding(end = 4.dp), color = Orange600, strokeWidth = 2.dp)
                         else IconButton(onClick = { onReread(photoPath) }) { Icon(Icons.Default.AutoAwesome, "Re-read ${col.header} with AI", tint = Orange600) }
                     }
+                    onUpload?.let { upload -> IconButton(onClick = upload) { Icon(Icons.Default.AddPhotoAlternate, "Upload photo for ${col.header}", tint = Slate500) } }
                     IconButton(onClick = it) { Icon(Icons.Default.CameraAlt, "Photo for ${col.header}", tint = if (photoPath != null) Green700 else Slate500) }
                 }
             }
@@ -620,7 +655,7 @@ private fun InputCell(
 }
 
 @Composable
-private fun ImageCell(col: Col, photoPath: String?, onCamera: (() -> Unit)?) {
+private fun ImageCell(col: Col, photoPath: String?, onCamera: (() -> Unit)?, onUpload: (() -> Unit)?) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -628,7 +663,6 @@ private fun ImageCell(col: Col, photoPath: String?, onCamera: (() -> Unit)?) {
             .clip(RoundedCornerShape(14.dp))
             .background(if (photoPath != null) Color.White else Orange50)
             .border(1.dp, if (photoPath != null) Slate300 else Orange200, RoundedCornerShape(14.dp))
-            .clickable(enabled = onCamera != null) { onCamera?.invoke() }
             .padding(8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -638,12 +672,13 @@ private fun ImageCell(col: Col, photoPath: String?, onCamera: (() -> Unit)?) {
                 modifier = Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)))
             Column(Modifier.weight(1f)) {
                 Text(col.header, fontSize = 12.sp, color = Slate600)
-                Text("Photo attached · tap to retake", fontSize = 12.sp, color = Green700, fontWeight = FontWeight.Bold)
+                Text("Photo attached", fontSize = 12.sp, color = Green700, fontWeight = FontWeight.Bold)
             }
         } else {
-            Icon(Icons.Default.CameraAlt, null, tint = Orange600)
-            Text("${col.header} — tap to capture", color = Orange800, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Text(col.header, color = Orange800, fontWeight = FontWeight.Bold, fontSize = 13.sp, modifier = Modifier.weight(1f))
         }
+        onUpload?.let { IconButton(onClick = it) { Icon(Icons.Default.AddPhotoAlternate, "Upload ${col.header}", tint = Orange600) } }
+        onCamera?.let { IconButton(onClick = it) { Icon(Icons.Default.CameraAlt, "Capture ${col.header}", tint = Orange600) } }
     }
 }
 
@@ -725,17 +760,32 @@ private fun CalcCell(col: Col, value: String) {
     }
 }
 
-private suspend fun readMeter(context: Context, imagePath: String, label: String): String {
+/** Reads the photo with Gemini (structured transcription) or, offline, with Qwen. Shows any review warnings. */
+private suspend fun readMeter(context: Context, photoPath: String, col: Col, request: ReadingRequest): String {
+    val imagePath = com.technavious.om15.camera.CameraCapture.boxFileFor(File(photoPath)).takeIf { it.exists() }?.absolutePath ?: photoPath
     if (GeminiMeterReader.useGemini(context)) {
         try {
-            val bitmap = withContext(Dispatchers.IO) { BitmapFactory.decodeFile(imagePath) } ?: return ""
-            return withContext(Dispatchers.IO) { GeminiMeterReader(GeminiMeterReader.getApiKey(context)).readMeterImage(bitmap, label, null) }
+            val bitmap = withContext(Dispatchers.IO) {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }.also { BitmapFactory.decodeFile(imagePath, it) }
+                var sample = 1
+                while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 1600) sample *= 2
+                BitmapFactory.decodeFile(imagePath, BitmapFactory.Options().apply { inSampleSize = sample })
+            } ?: return ""
+            val (x, choice) = withContext(Dispatchers.IO) {
+                GeminiMeterReader(context, GeminiMeterReader.getApiKey(context)).read(bitmap, request)
+                    .also { (x, _) -> File("$imagePath.ai.json").writeText(x.rawJson) }
+            }
+            if (choice.reviewReasons.isNotEmpty()) {
+                Toast.makeText(context, "Check ${col.header}: ${choice.reviewReasons.first()}", Toast.LENGTH_LONG).show()
+            }
+            return choice.value
         } catch (e: Exception) {
-            Toast.makeText(context, "Gemini error: ${e.message?.take(100)} - trying offline AI", Toast.LENGTH_LONG).show()
+            val why = if (e is GeminiMeterReader.GeminiUnavailableException) e.message else "Online AI error: ${e.message?.take(80)}"
+            Toast.makeText(context, "$why — reading offline instead", Toast.LENGTH_LONG).show()
         }
     }
     val qwen = QwenMeterReader.getInstance()
     if (!qwen.isLoaded()) withContext(Dispatchers.IO) { qwen.loadModel(context) }
     if (!qwen.isLoaded()) return ""
-    return withContext(Dispatchers.IO) { qwen.readMeterImage(imagePath, label, null) }
+    return withContext(Dispatchers.IO) { qwen.readMeterImage(imagePath, col.header, col.unit) }
 }
